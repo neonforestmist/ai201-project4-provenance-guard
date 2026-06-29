@@ -305,3 +305,15 @@ Before starting any stretch feature, I will update this planning document with:
 - what new data is stored or returned
 - how it will be documented in the README
 - how it will be verified in a demo or test
+
+## Stretch Feature: Ensemble Detection
+
+Stretch feature attempted: ensemble detection. The required system needs at least two distinct signals; this project implements three by adding `formulaic_pattern_scan` alongside Groq LLM classification and stylometric heuristics.
+
+Architecture impact: the architecture diagram already includes the third signal as `Formulaic pattern scan`, feeding the same weighted ensemble scorer as the other signals. No separate service is needed because the formulaic scan is a local Python signal.
+
+Data returned and stored: each submission response and `classification_decision` audit-log event includes all three signal objects in the `signals` array. Each object includes `name`, `ai_probability`, `confidence`, `available`, `rationale`, and signal-specific `details`.
+
+README documentation: the ensemble is documented in `## Detection Signals`, `## Confidence and Uncertainty`, and the Milestone 4 through Milestone 6 evidence sections. The README explains why the third signal is distinct, how it is weighted, and what it can misclassify.
+
+Verification: `python scripts/milestone4_eval.py` shows the third signal's score beside the other signals, `python scripts/milestone5_demo.py` proves the production flow still returns all label variants, and `python -m unittest discover -s tests` verifies the API and audit log include per-signal evidence.

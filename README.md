@@ -41,6 +41,12 @@ Run the Milestone 5 production-layer evidence script:
 python scripts/milestone5_demo.py
 ```
 
+Prepare the portfolio walkthrough:
+
+```bash
+cat docs/walkthrough_script.md
+```
+
 ## Milestone 3 Evidence
 
 Milestone 3 asks for the Flask submission endpoint and first detection signal to work end to end. This repo now supports both the canonical `POST /api/submissions` route and a course-wording-compatible `POST /submit` alias. The first signal is `groq_llm_classification`, which calls Groq `llama-3.3-70b-versatile` when `GROQ_API_KEY` is configured and returns an auditable signal object with `ai_probability`, `confidence`, `available`, `rationale`, and model details.
@@ -110,6 +116,18 @@ The demo script proves:
 | Complete audit log | Reads `GET /log?limit=10` and shows classification entries with signal counts plus an appeal entry with `appeal_reasoning`. |
 
 The production default submission limit is `12 per minute; 100 per day`. The lower demo limit is only used to make the `429` proof quick and repeatable.
+
+## Milestone 6 Evidence
+
+Milestone 6 is the final documentation and walkthrough pass. This README is the canonical project record: it explains the architecture, why each detection signal exists, how confidence scoring communicates uncertainty, exact transparency label text, rate-limit choices, audit-log evidence, limitations, spec reflection, and AI usage. The short recording outline for the separate Course Portal video is in `docs/walkthrough_script.md`.
+
+## Architecture Overview
+
+A submitted text enters through `POST /api/submissions` or the course-compatible `POST /submit` alias. Flask validates that the body is long enough to analyze, then Flask-Limiter checks the per-client submission limit before any scoring work happens. The detection pipeline runs independent signals over the same text: a Groq LLM review when an API key is present, local stylometric heuristics, and a local formulaic-pattern scan.
+
+Each signal returns the same normalized shape: an AI probability, confidence, availability flag, rationale, and signal-specific details. The ensemble scorer weights the available signals into one `ai_probability`, then calculates `confidence_score` from distance away from the uncertain middle plus signal agreement. The label selector maps that result to one of three reader-facing transparency labels. SQLite stores the submission, content hash, scores, signal details, label text, status, and timestamps, then writes the same decision to the structured `audit_log`.
+
+If the creator disagrees, they send `POST /api/appeals` or `POST /appeal` with the content ID and creator reasoning. The app verifies the original submission exists, records the appeal, updates the submission to `under_review`, and writes an appeal event beside the original classification decision in the audit log. Reviewers can inspect the current status with `GET /api/submissions/<id>` and inspect the evidence stream with `GET /api/log` or `GET /log`.
 
 ## API
 
@@ -200,6 +218,8 @@ This project uses an ensemble of three distinct signals. The first two satisfy t
 | `stylometric_heuristics` | Sentence-length variance, vocabulary diversity, average sentence length, and punctuation density. | It cannot understand meaning, authorship history, genre, or deliberate stylistic choices. |
 | `formulaic_pattern_scan` | Template-like phrases, repeated bigrams, and repeated sentence openings. | It can mistake intentionally formal writing for generated writing and misses subtle AI text with varied wording. |
 
+I chose Groq plus stylometry as the required independent pair because they look at different evidence. Groq can make a holistic language judgment, while stylometry ignores meaning and measures structure. The formulaic scan is the stretch-style third signal. It catches repeated template phrasing that is related to, but not identical to, sentence uniformity. That extra signal also keeps local demos useful when Groq is unavailable.
+
 Weights are `55% Groq`, `30% stylometry`, and `15% formulaic pattern scan` when Groq is available. If Groq is not configured, the local signals are reweighted so the app can still run, but the final demo should include a real Groq key.
 
 ## Confidence and Uncertainty
@@ -215,6 +235,16 @@ Thresholds:
 | Uncertain | Anything between those ranges or with low confidence | `uncertain` |
 
 I tested this by submitting polished formulaic text, more idiosyncratic personal prose, and mixed/shorter creative excerpts. The scores are intentionally conservative because a false positive against a human creator is more harmful than a missed AI-generated piece.
+
+Example scores from `python scripts/milestone4_eval.py` with local deterministic scoring:
+
+| Sample | AI probability | Confidence score | Result | Why it landed there |
+| --- | ---: | ---: | --- | --- |
+| `casual_human` | `0.120` | `0.874` | `human_written` | Both local signals show low AI evidence: stylometry `0.180`, formulaic scan `0.000`. The score is far from the uncertain middle, so confidence is high. |
+| `template_ai` | `0.740` | `0.738` | `ai_generated` | Stylometry `0.648` and formulaic scan `0.925` both point toward AI-like structure, enough to cross the high-confidence AI threshold. |
+| `borderline_formulaic` | `0.517` | `0.506` | `uncertain` | The formulaic scan is high at `0.910`, but stylometry is lower at `0.320`. That disagreement keeps confidence low and prevents an overclaimed label. |
+
+The third row is the important validation case: a text can contain AI-like phrases and still receive `uncertain` when signals do not agree strongly enough. That behavior is intentional because the system should protect human creators from brittle false positives.
 
 ## Transparency Labels
 
@@ -275,24 +305,47 @@ Example visible entries from `GET /api/log?limit=3` after running `python script
 
 ## Known Limitations
 
-Short poems, highly polished human essays, and intentionally repetitive experimental writing are likely weak spots. The stylometric and formulaic signals may treat formal structure as suspicious, while the LLM signal may not know the creator's actual drafting history. The appeals workflow exists because the system should not pretend that automated provenance detection is definitive.
+Short poems are a weak spot because there may not be enough sentence variety or vocabulary range for stylometry to measure reliably. Highly polished school essays and non-native English writing can also be misclassified because they may use repeated transition phrases, restrained punctuation, and uniform sentence structures that the stylometric and formulaic signals treat as AI-like. Intentionally repetitive experimental writing is another risky case: the formulaic scan may treat artistic repetition as template repetition.
+
+The Groq signal reduces some of those blind spots by reading semantics, but it still cannot know the creator's drafting history and may inherit model bias around what "AI-like" prose sounds like. For real deployment, I would add more creator-controlled evidence such as draft history, optional verification, reviewer notes, and appeal outcomes before making strong product decisions from the score.
 
 ## Spec Reflection
 
-The original plan was the recommended two-signal design: Groq plus stylometric heuristics. During implementation I added `formulaic_pattern_scan` as a third lightweight signal because it captures template repetition separately from broad stylometry and gives the app a useful local signal when Groq is not configured. I kept the final label thresholds conservative to match the project hint that false positives against human creators are especially harmful.
+The spec helped most by forcing the architecture to include both the original decision and the appeal path from the beginning. Because the assignment asked for the audit log, status update, and transparency label together, I designed submissions, appeals, labels, and logging as one flow instead of treating appeals as an afterthought.
+
+The main divergence from my first plan was adding `formulaic_pattern_scan` as a third lightweight signal. The required design only needed Groq plus stylometry, but repeated template language felt distinct enough to measure separately. I kept its ensemble weight smaller than Groq and stylometry because formal human writing can trigger those markers. I also kept the label thresholds conservative to reflect the project hint that false positives against human creators are especially harmful.
 
 ## AI Usage
 
-I used Codex to scaffold the Flask routes, SQLite audit store, detection pipeline, tests, and documentation from the CodePath Project 4 spec and grading rubric. I reviewed the generated structure against the rubric and revised the plan to include visible per-signal scores, exact label text in the README, and an appeal entry that appears alongside the original classification in the audit log.
+I used Codex in several specific places, but I treated the output as a draft to inspect and revise.
 
-I also used AI assistance to draft the architecture narrative and confidence-threshold explanation. I revised the output to keep the language conservative, to avoid claiming perfect AI detection, and to make the labels understandable to non-technical readers.
+1. I directed Codex to turn the planning architecture into a Flask backend with submission, appeal, and audit-log routes. It produced the initial app factory, SQLite store, and route structure. I revised the API shape to keep both canonical routes and course-compatible aliases (`/api/submissions` plus `/submit`, `/api/appeals` plus `/appeal`) and added explicit audit fields such as `content_id`, `appeal_filed`, and `appeal_reasoning`.
+
+2. I directed Codex to implement the scoring pipeline from the planned signals. It produced Groq, stylometric, and formulaic signal functions plus the weighted combiner. I revised the confidence thresholds to be conservative, added deterministic tests for high-confidence and uncertain cases, and checked that borderline formulaic writing stayed `uncertain` instead of being forced into an AI label.
+
+3. I used Codex to draft evidence sections for the README and the milestone demo scripts. I revised the language to avoid claiming perfect detection, added actual score examples from the test script, and made the transparency labels readable for non-technical platform users.
+
+## Portfolio Walkthrough
+
+The required walkthrough video is submitted separately through the Course Portal. The repo includes a short script at `docs/walkthrough_script.md` that walks through the architecture, runs the demo evidence, and gives a few design decisions to narrate. The fastest recording path is:
+
+```bash
+source .venv/bin/activate
+python scripts/milestone5_demo.py
+python -m unittest discover -s tests
+```
+
+The video should show the README architecture section, run the milestone demo, point out the three labels, show the appeal status changing to `under_review`, show the audit-log entries, and briefly explain why uncertain is a real product state rather than a failure.
 
 ## Submission Checklist
 
 - `POST /api/submissions` returns structured JSON with result, confidence, label, and per-signal scores.
 - At least two distinct detection signals are implemented; the app includes three.
+- README includes an architecture overview of the submission and appeal paths.
+- README includes confidence-scoring reasoning plus actual high-confidence and lower-confidence example scores.
 - README includes confidence thresholds and all three label variants as exact text.
 - `POST /api/appeals` and `POST /appeal` record creator reasoning and mark the submission `under_review`.
 - `POST /api/submissions` is rate-limited and documents the chosen limits.
 - `GET /api/log` returns structured audit entries with classifications and appeals.
 - `planning.md` includes an `## Architecture` section with a diagram and design narrative.
+- `docs/walkthrough_script.md` prepares the short portfolio walkthrough video.
