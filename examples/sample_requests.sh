@@ -12,5 +12,12 @@ curl -s -X POST "$BASE_URL/api/submissions" \
     "content": "In today'\''s rapidly evolving creative landscape, it is important to note that storytelling empowers communities. Overall, this essay explores how technology can enhance expression, foster collaboration, and unlock new opportunities for meaningful human connection."
   }'
 
+curl -s -X POST "$BASE_URL/submit" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "creator_id": "creator-demo",
+    "text": "The lamp above the desk flickered twice before dawn. I left the letter folded under a chipped mug and waited for the hallway to stop echoing."
+  }'
+
 curl -s "$BASE_URL/api/log?limit=3"
 

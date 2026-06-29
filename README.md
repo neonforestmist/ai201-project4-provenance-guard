@@ -35,11 +35,33 @@ Seed demo submissions and an appeal:
 python scripts/seed_demo.py
 ```
 
+## Milestone 3 Evidence
+
+Milestone 3 asks for the Flask submission endpoint and first detection signal to work end to end. This repo now supports both the canonical `POST /api/submissions` route and a course-wording-compatible `POST /submit` alias. The first signal is `groq_llm_classification`, which calls Groq `llama-3.3-70b-versatile` when `GROQ_API_KEY` is configured and returns an auditable signal object with `ai_probability`, `confidence`, `available`, `rationale`, and model details.
+
+Verification commands:
+
+```bash
+python -m unittest discover -s tests
+flask --app app run --debug
+
+curl -s -X POST http://127.0.0.1:5000/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "creator_id": "creator-demo",
+    "content": "In a rapidly evolving creative landscape, it is important to note that storytelling empowers communities. Overall, this essay explores how technology can enhance expression, foster collaboration, and unlock new opportunities for meaningful human connection."
+  }'
+```
+
+A successful response includes `submission_id`, `attribution_result`, `confidence_score`, `transparency_label`, and a `signals` array containing `groq_llm_classification`.
+
 ## API
 
 ### Submit content
 
 `POST /api/submissions`
+
+Milestone 3 compatibility alias: `POST /submit` accepts the same JSON body. It also accepts `text` as an alias for `content`, but `content` is the canonical field used in the rest of the API.
 
 ```json
 {

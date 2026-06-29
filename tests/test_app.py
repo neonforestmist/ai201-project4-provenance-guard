@@ -48,6 +48,26 @@ class ProvenanceGuardTests(unittest.TestCase):
         self.assertGreaterEqual(len(data["signals"]), 3)
         self.assertTrue(any(signal["name"] == "stylometric_heuristics" for signal in data["signals"]))
 
+    def test_submit_alias_accepts_text_field(self):
+        response = self.client.post(
+            "/submit",
+            json={
+                "creator_id": "creator-alias",
+                "text": (
+                    "In today's rapidly evolving creative landscape, storytelling helps "
+                    "communities share context, trust, and creative intent with readers."
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        data = response.get_json()
+        self.assertIn("submission_id", data)
+        self.assertIn("transparency_label", data)
+        self.assertTrue(
+            any(signal["name"] == "groq_llm_classification" for signal in data["signals"])
+        )
+
     def test_submission_rejects_too_short_content(self):
         response = self.client.post("/api/submissions", json={"content": "Too short."})
         self.assertEqual(response.status_code, 400)

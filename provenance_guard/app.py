@@ -56,11 +56,8 @@ def create_app(test_config: Optional[dict] = None) -> Flask:
     def health():
         return jsonify({"status": "ok"})
 
-    @app.post("/api/submissions")
-    @limiter.limit(lambda: current_app.config["SUBMISSION_RATE_LIMIT"])
-    def submit_content():
-        payload = request.get_json(silent=True) or {}
-        content = (payload.get("content") or "").strip()
+    def classify_submission_payload(payload: dict):
+        content = (payload.get("content") or payload.get("text") or "").strip()
         creator_id = payload.get("creator_id")
 
         if len(content) < 40:
@@ -82,6 +79,18 @@ def create_app(test_config: Optional[dict] = None) -> Flask:
             decision=decision,
         )
         return jsonify(submission), 201
+
+    @app.post("/api/submissions")
+    @limiter.limit(lambda: current_app.config["SUBMISSION_RATE_LIMIT"])
+    def submit_content():
+        payload = request.get_json(silent=True) or {}
+        return classify_submission_payload(payload)
+
+    @app.post("/submit")
+    @limiter.limit(lambda: current_app.config["SUBMISSION_RATE_LIMIT"])
+    def submit_content_alias():
+        payload = request.get_json(silent=True) or {}
+        return classify_submission_payload(payload)
 
     @app.get("/api/submissions/<submission_id>")
     def get_submission(submission_id: str):
