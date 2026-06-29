@@ -46,7 +46,7 @@ def create_app(test_config: Optional[dict] = None) -> Flask:
                 "routes": {
                     "health": "GET /health",
                     "submit": "POST /api/submissions",
-                    "appeal": "POST /api/appeals",
+                    "appeal": "POST /api/appeals or POST /appeal",
                     "log": "GET /api/log",
                 },
             }
@@ -99,11 +99,9 @@ def create_app(test_config: Optional[dict] = None) -> Flask:
             return jsonify({"error": "not_found"}), 404
         return jsonify(submission)
 
-    @app.post("/api/appeals")
-    def submit_appeal():
-        payload = request.get_json(silent=True) or {}
-        submission_id = (payload.get("submission_id") or "").strip()
-        reason = (payload.get("reason") or "").strip()
+    def create_appeal_from_payload(payload: dict):
+        submission_id = (payload.get("submission_id") or payload.get("content_id") or "").strip()
+        reason = (payload.get("reason") or payload.get("creator_reasoning") or "").strip()
         creator_id = payload.get("creator_id")
 
         if not submission_id:
@@ -124,6 +122,16 @@ def create_app(test_config: Optional[dict] = None) -> Flask:
         if not appeal:
             return jsonify({"error": "submission_not_found"}), 404
         return jsonify(appeal), 201
+
+    @app.post("/api/appeals")
+    def submit_appeal():
+        payload = request.get_json(silent=True) or {}
+        return create_appeal_from_payload(payload)
+
+    @app.post("/appeal")
+    def submit_appeal_alias():
+        payload = request.get_json(silent=True) or {}
+        return create_appeal_from_payload(payload)
 
     def audit_log_response():
         raw_limit = request.args.get("limit", "50")

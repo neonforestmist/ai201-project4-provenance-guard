@@ -67,11 +67,16 @@ class AuditStore:
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         payload = {
             "submission_id": submission_id,
+            "content_id": submission_id,
             "creator_id": creator_id,
             "status": "classified",
             "content_hash": content_hash,
             "content_preview": content_preview,
             **decision,
+            "attribution": decision["attribution_result"],
+            "confidence": decision["confidence_score"],
+            "label": decision["transparency_label"],
+            "appeal_filed": False,
             "created_at": created_at,
         }
 
@@ -116,9 +121,15 @@ class AuditStore:
                 "SELECT * FROM submissions WHERE id = ?",
                 (submission_id,),
             ).fetchone()
+            appeal_exists = connection.execute(
+                "SELECT 1 FROM appeals WHERE submission_id = ? LIMIT 1",
+                (submission_id,),
+            ).fetchone()
         if not row:
             return None
-        return self._submission_from_row(row)
+        submission = self._submission_from_row(row)
+        submission["appeal_filed"] = bool(appeal_exists)
+        return submission
 
     def create_appeal(self, submission_id: str, creator_id: Optional[str], reason: str) -> Optional[dict]:
         submission = self.get_submission(submission_id)
@@ -130,14 +141,21 @@ class AuditStore:
         payload = {
             "appeal_id": appeal_id,
             "submission_id": submission_id,
+            "content_id": submission_id,
             "creator_id": creator_id,
             "reason": reason,
+            "creator_reasoning": reason,
+            "appeal_reasoning": reason,
             "status": "under_review",
+            "appeal_filed": True,
             "original_decision": {
                 "attribution_result": submission["attribution_result"],
+                "attribution": submission["attribution_result"],
                 "ai_probability": submission["ai_probability"],
                 "confidence_score": submission["confidence_score"],
+                "confidence": submission["confidence_score"],
                 "transparency_label": submission["transparency_label"],
+                "label": submission["transparency_label"],
             },
             "created_at": created_at,
         }
@@ -183,6 +201,7 @@ class AuditStore:
                     "id": row["id"],
                     "event_type": row["event_type"],
                     "submission_id": row["submission_id"],
+                    "content_id": row["submission_id"],
                     "created_at": row["created_at"],
                     "payload": json.loads(row["payload_json"]),
                 }
@@ -213,15 +232,20 @@ class AuditStore:
     def _submission_from_row(self, row: sqlite3.Row) -> dict:
         return {
             "submission_id": row["id"],
+            "content_id": row["id"],
             "creator_id": row["creator_id"],
             "content_hash": row["content_hash"],
             "content_preview": row["content_preview"],
             "status": row["status"],
             "attribution_result": row["attribution_result"],
+            "attribution": row["attribution_result"],
             "ai_probability": row["ai_probability"],
             "confidence_score": row["confidence_score"],
+            "confidence": row["confidence_score"],
             "transparency_label": row["transparency_label"],
+            "label": row["transparency_label"],
             "signals": json.loads(row["signals_json"]),
+            "appeal_filed": False,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

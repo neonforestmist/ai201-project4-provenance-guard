@@ -35,6 +35,12 @@ Seed demo submissions and an appeal:
 python scripts/seed_demo.py
 ```
 
+Run the Milestone 5 production-layer evidence script:
+
+```bash
+python scripts/milestone5_demo.py
+```
+
 ## Milestone 3 Evidence
 
 Milestone 3 asks for the Flask submission endpoint and first detection signal to work end to end. This repo now supports both the canonical `POST /api/submissions` route and a course-wording-compatible `POST /submit` alias. The first signal is `groq_llm_classification`, which calls Groq `llama-3.3-70b-versatile` when `GROQ_API_KEY` is configured and returns an auditable signal object with `ai_probability`, `confidence`, `available`, `rationale`, and model details.
@@ -83,6 +89,28 @@ curl -s http://127.0.0.1:5000/api/log?limit=3
 curl -s http://127.0.0.1:5000/log?limit=3
 ```
 
+## Milestone 5 Evidence
+
+Milestone 5 adds the production layer: all three transparency label variants, a course-compatible appeals workflow, rate limiting, and a complete structured audit log.
+
+Verification commands:
+
+```bash
+python -m unittest discover -s tests
+python scripts/milestone5_demo.py
+```
+
+The demo script proves:
+
+| Feature | Evidence |
+| --- | --- |
+| Transparency labels | Submits three samples through `POST /submit` and confirms `likely_ai`, `likely_human`, and `uncertain` all return the exact label text from `planning.md`. |
+| Appeals workflow | Sends `POST /appeal` with `content_id` and `creator_reasoning`; the response returns `status: under_review` and the stored appeal reasoning. |
+| Rate limiting | Runs a separate app instance with `SUBMISSION_RATE_LIMIT="2 per minute"` and gets status codes `[201, 201, 429]`. |
+| Complete audit log | Reads `GET /log?limit=10` and shows classification entries with signal counts plus an appeal entry with `appeal_reasoning`. |
+
+The production default submission limit is `12 per minute; 100 per day`. The lower demo limit is only used to make the `429` proof quick and repeatable.
+
 ## API
 
 ### Submit content
@@ -103,11 +131,16 @@ The response includes a structured attribution result, confidence score, transpa
 ```json
 {
   "submission_id": "uuid",
+  "content_id": "uuid",
   "status": "classified",
   "attribution_result": "uncertain",
+  "attribution": "uncertain",
   "ai_probability": 0.541,
   "confidence_score": 0.571,
+  "confidence": 0.571,
   "transparency_label": "Provenance Guard: We cannot confidently determine how this piece was created. Readers should treat the attribution as uncertain, and the creator can provide more context.",
+  "label": "Provenance Guard: We cannot confidently determine how this piece was created. Readers should treat the attribution as uncertain, and the creator can provide more context.",
+  "appeal_filed": false,
   "signals": [
     {
       "name": "groq_llm_classification",
@@ -135,11 +168,15 @@ The response includes a structured attribution result, confidence score, transpa
 
 `POST /api/appeals`
 
+Milestone 5 compatibility alias: `POST /appeal` accepts `content_id` as an alias for `submission_id` and `creator_reasoning` as an alias for `reason`.
+
 ```json
 {
   "submission_id": "uuid-from-submit-response",
+  "content_id": "same-uuid-if-using-the-course-alias",
   "creator_id": "creator-demo",
-  "reason": "This was drafted from my notebook and I can provide earlier versions for review."
+  "reason": "This was drafted from my notebook and I can provide earlier versions for review.",
+  "creator_reasoning": "Same field, accepted for the course-compatible /appeal route."
 }
 ```
 
@@ -193,11 +230,11 @@ The label text returned by the API is written for readers, not developers.
 
 `POST /api/submissions` is limited to `12 per minute; 100 per day` per remote address.
 
-Reasoning: a real writing platform might see a creator checking several drafts in a burst, so the per-minute limit allows normal experimentation. The daily cap blocks automated flooding and repeated adversarial probing without blocking realistic personal usage. When the limit is hit, Flask-Limiter returns HTTP `429` with a JSON error message.
+Reasoning: a real writing platform might see a creator checking several drafts in a burst, so the per-minute limit allows normal experimentation. The daily cap blocks automated flooding and repeated adversarial probing without blocking realistic personal usage. When the limit is hit, Flask-Limiter returns HTTP `429` with a JSON error message. `python scripts/milestone5_demo.py` verifies this path with a temporary `2 per minute` limit and receives `[201, 201, 429]`.
 
 ## Audit Log
 
-The audit log is stored in SQLite at `data/provenance_guard.sqlite3` by default. Each classification entry includes timestamp, result, confidence score, content hash, label text, and signal details. Each appeal entry includes the creator's reasoning and the original decision.
+The audit log is stored in SQLite at `data/provenance_guard.sqlite3` by default. Each classification entry includes timestamp, content ID, attribution result, confidence score, content hash, label text, individual signal scores, and `appeal_filed: false`. Each appeal entry includes the content ID, creator reasoning, `status: under_review`, `appeal_filed: true`, and the original decision.
 
 Example visible entries from `GET /api/log?limit=3` after running `python scripts/seed_demo.py`:
 
@@ -208,6 +245,7 @@ Example visible entries from `GET /api/log?limit=3` after running `python script
       "event_type": "appeal_submitted",
       "payload": {
         "status": "under_review",
+        "appeal_reasoning": "The creator says this was drafted from their own outline and wants manual review.",
         "reason": "The creator says this was drafted from their own outline and wants manual review.",
         "original_decision": {
           "attribution_result": "uncertain",
@@ -254,7 +292,7 @@ I also used AI assistance to draft the architecture narrative and confidence-thr
 - `POST /api/submissions` returns structured JSON with result, confidence, label, and per-signal scores.
 - At least two distinct detection signals are implemented; the app includes three.
 - README includes confidence thresholds and all three label variants as exact text.
-- `POST /api/appeals` records creator reasoning and marks the submission `under_review`.
+- `POST /api/appeals` and `POST /appeal` record creator reasoning and mark the submission `under_review`.
 - `POST /api/submissions` is rate-limited and documents the chosen limits.
 - `GET /api/log` returns structured audit entries with classifications and appeals.
 - `planning.md` includes an `## Architecture` section with a diagram and design narrative.
