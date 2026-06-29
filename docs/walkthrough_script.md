@@ -14,6 +14,7 @@ Optional sanity check:
 
 ```bash
 python -m unittest discover -s tests
+python scripts/stretch_demo.py
 ```
 
 ## Recording Flow
@@ -53,6 +54,10 @@ Say: "The most important design choice was to make uncertainty a real outcome. I
 7. Mention limitations.
 
 Say: "This system can still get polished essays, short poems, non-native English writing, or intentionally repetitive experimental writing wrong because those styles can look uniform or formulaic to the local signals. That is why the appeal path and audit log are part of the core design."
+
+8. Mention stretch features.
+
+Say: "The stretch features are also covered: the ensemble uses three signals, the certificate endpoint issues a verified-human display label after extra evidence, the dashboard shows detection patterns and appeal rate, and the submit endpoint handles image descriptions and structured metadata in addition to text."
 
 ## Closing Line
 

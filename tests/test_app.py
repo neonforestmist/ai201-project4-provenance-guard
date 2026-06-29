@@ -77,6 +77,7 @@ class ProvenanceGuardTests(unittest.TestCase):
         data = response.get_json()
         self.assertIn("submission_id", data)
         self.assertEqual(data["content_id"], data["submission_id"])
+        self.assertEqual(data["content_type"], "text")
         self.assertIn(data["attribution_result"], {"ai_generated", "human_written", "uncertain"})
         self.assertEqual(data["attribution"], data["attribution_result"])
         self.assertIn("confidence_score", data)
@@ -84,6 +85,7 @@ class ProvenanceGuardTests(unittest.TestCase):
         self.assertIn("transparency_label", data)
         self.assertEqual(data["label"], data["transparency_label"])
         self.assertFalse(data["appeal_filed"])
+        self.assertIsNone(data["provenance_certificate"])
         self.assertGreaterEqual(len(data["signals"]), 3)
         self.assertTrue(any(signal["name"] == "stylometric_heuristics" for signal in data["signals"]))
 
@@ -252,6 +254,134 @@ class ProvenanceGuardTests(unittest.TestCase):
         self.assertEqual(limit_response.status_code, 429)
         self.assertEqual(limit_response.get_json()["error"], "rate_limit_exceeded")
         self.assertEqual(limit_response.get_json()["limit"], "2 per minute")
+
+    def test_metadata_submission_uses_multimodal_pipeline(self):
+        response = self.client.post(
+            "/submit",
+            json={
+                "creator_id": "creator-metadata",
+                "content_type": "metadata",
+                "metadata": {
+                    "title": "Rain Study",
+                    "caption": (
+                        "A quiet mixed-media piece about waiting through a storm "
+                        "and documenting the changing light near the studio window."
+                    ),
+                    "tags": ["painting", "storm", "studio-notes"],
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        data = response.get_json()
+        self.assertEqual(data["content_type"], "metadata")
+        self.assertEqual(data["source_payload"]["metadata"]["title"], "Rain Study")
+        self.assertIn(data["attribution_result"], {"ai_generated", "human_written", "uncertain"})
+        self.assertGreaterEqual(len(data["signals"]), 3)
+
+        log_entry = self.client.get("/log?limit=1").get_json()["entries"][0]
+        self.assertEqual(log_entry["payload"]["content_type"], "metadata")
+        self.assertEqual(log_entry["payload"]["source_payload"]["metadata"]["tags"][0], "painting")
+
+    def test_certificate_workflow_displays_verified_human_badge(self):
+        submission_response = self.client.post(
+            "/submit",
+            json={
+                "creator_id": "creator-certified",
+                "content": CASUAL_HUMAN_SAMPLE,
+            },
+        )
+        submission_id = submission_response.get_json()["content_id"]
+
+        certificate_response = self.client.post(
+            "/certificate",
+            json={
+                "content_id": submission_id,
+                "creator_id": "creator-certified",
+                "verification_method": "draft_history",
+                "evidence_summary": (
+                    "Creator provided timestamped draft notes and revision history "
+                    "that match the submitted piece."
+                ),
+            },
+        )
+
+        self.assertEqual(certificate_response.status_code, 201)
+        certificate = certificate_response.get_json()
+        self.assertEqual(certificate["status"], "verified_human")
+        self.assertEqual(certificate["content_id"], submission_id)
+        self.assertIn("Verified human creator", certificate["display_label"])
+
+        updated_submission = self.client.get(f"/api/submissions/{submission_id}").get_json()
+        self.assertEqual(updated_submission["status"], "verified_human")
+        self.assertIsNotNone(updated_submission["provenance_certificate"])
+        self.assertEqual(
+            updated_submission["provenance_certificate"]["display_label"],
+            certificate["display_label"],
+        )
+
+        log_entry = self.client.get("/log?limit=1").get_json()["entries"][0]
+        self.assertEqual(log_entry["event_type"], "certificate_issued")
+        self.assertEqual(log_entry["payload"]["status"], "verified_human")
+
+    def test_analytics_json_and_dashboard_show_stretch_metrics(self):
+        ai_response = self.client.post(
+            "/submit",
+            json={"creator_id": "analytics-ai", "content": TEMPLATE_AI_SAMPLE},
+        )
+        human_response = self.client.post(
+            "/submit",
+            json={"creator_id": "analytics-human", "content": CASUAL_HUMAN_SAMPLE},
+        )
+        self.client.post(
+            "/submit",
+            json={
+                "creator_id": "analytics-metadata",
+                "content_type": "metadata",
+                "metadata": {
+                    "title": "Gallery Wall Notes",
+                    "caption": "Installation notes for a handmade gallery wall with uneven frames.",
+                    "materials": ["paper", "ink", "wood"],
+                },
+            },
+        )
+        self.client.post(
+            "/appeal",
+            json={
+                "content_id": ai_response.get_json()["content_id"],
+                "creator_reasoning": "This was written from a personal outline and should be reviewed.",
+            },
+        )
+        self.client.post(
+            "/certificate",
+            json={
+                "content_id": human_response.get_json()["content_id"],
+                "creator_id": "analytics-human",
+                "verification_method": "manual_review",
+                "evidence_summary": "Reviewer checked draft notes and identity context for this creator.",
+            },
+        )
+
+        analytics_response = self.client.get("/api/analytics")
+        self.assertEqual(analytics_response.status_code, 200)
+        analytics = analytics_response.get_json()
+        self.assertEqual(analytics["total_submissions"], 3)
+        self.assertGreaterEqual(
+            analytics["detection_patterns"]["attribution_counts"]["ai_generated"],
+            1,
+        )
+        self.assertEqual(analytics["detection_patterns"]["content_type_counts"]["metadata"], 1)
+        self.assertEqual(analytics["appeal_count"], 1)
+        self.assertAlmostEqual(analytics["appeal_rate"], 1 / 3, places=2)
+        self.assertEqual(analytics["certificate_count"], 1)
+        self.assertIn("average_confidence_score", analytics)
+
+        dashboard_response = self.client.get("/dashboard")
+        html = dashboard_response.get_data(as_text=True)
+        self.assertEqual(dashboard_response.status_code, 200)
+        self.assertIn("Detection Patterns", html)
+        self.assertIn("Appeal rate", html)
+        self.assertIn("Average confidence", html)
 
 
 if __name__ == "__main__":

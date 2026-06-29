@@ -32,11 +32,12 @@ The core design principle is caution. A false positive that labels a human creat
 
 ```mermaid
 flowchart TD
-    A["Creator submits text"] --> B["Flask POST /api/submissions"]
+    A["Creator submits text, image description, or metadata"] --> B["Flask POST /api/submissions"]
     B --> C["Validation and rate limit"]
-    C --> D["Groq LLM classification"]
-    C --> E["Stylometric heuristics"]
-    C --> F["Formulaic pattern scan"]
+    C --> R["Normalize content into analysis text"]
+    R --> D["Groq LLM classification"]
+    R --> E["Stylometric heuristics"]
+    R --> F["Formulaic pattern scan"]
     D --> G["Weighted ensemble scorer"]
     E --> G
     F --> G
@@ -48,17 +49,23 @@ flowchart TD
     M --> N["Store appeal reasoning"]
     N --> O["Update status to under_review"]
     O --> J
+    S["Creator verification evidence"] --> T["POST /api/certificates"]
+    T --> U["Issue verified_human certificate"]
+    U --> V["Display certificate label on content"]
+    U --> J
     P["Reviewer or demo"] --> Q["GET /api/log"]
     J --> Q
+    W["Reviewer or demo"] --> X["GET /dashboard or /api/analytics"]
+    J --> X
 ```
 
 ## Architecture Narrative
 
-A single piece of text starts as a creator submission to the platform. The API receives the text, validates that it has enough content to evaluate, and checks the rate limit before spending model or storage resources. Then the text is sent through independent detection components. The Groq LLM signal gives a semantic review, the stylometric signal measures statistical writing structure, and the formulaic pattern signal looks for template-like repetition.
+A single piece of content starts as a creator submission to the platform. The API receives direct text, an image description, or structured metadata, normalizes it into analysis text, validates that it has enough content to evaluate, and checks the rate limit before spending model or storage resources. Then the normalized text is sent through independent detection components. The Groq LLM signal gives a semantic review, the stylometric signal measures statistical writing structure, and the formulaic pattern signal looks for template-like repetition.
 
 Those signal results move into the ensemble scorer, which combines them into an `ai_probability` and `confidence_score`. The label selector turns those numbers into the reader-facing output: likely AI, likely human, or uncertain. The API stores the result in SQLite with a content hash, content preview, timestamp, signal details, confidence, and final label text. At the same time, it writes a structured audit-log event so reviewers can inspect what happened later. Finally, the API returns a JSON response that includes the attribution result, confidence score, transparency label, and individual signal scores.
 
-If a creator disagrees with the decision, they submit an appeal against the `submission_id`. The appeals endpoint records the creator's reasoning, changes the content status to `under_review`, and writes an appeal event to the same audit log so the appeal is visible beside the original classification.
+If a creator disagrees with the decision, they submit an appeal against the `submission_id`. The appeals endpoint records the creator's reasoning, changes the content status to `under_review`, and writes an appeal event to the same audit log so the appeal is visible beside the original classification. If a creator completes an additional verification step, the certificate endpoint records the verification evidence, marks the content `verified_human`, and returns a display label that can be shown with the content. Reviewers can also open the analytics dashboard to see detection patterns, appeal rate, and average confidence.
 
 ## Component Responsibilities
 
@@ -66,10 +73,13 @@ If a creator disagrees with the decision, they submit an appeal against the `sub
 | --- | --- |
 | Flask API | Owns request validation, HTTP responses, and route boundaries. |
 | Flask-Limiter | Protects the content submission endpoint from floods and repeated probing. |
+| Content normalizer | Converts text, image descriptions, and structured metadata into analysis text while preserving content type and source payload. |
 | Detection pipeline | Runs independent signals and returns normalized `0.0` to `1.0` scores. |
 | Ensemble scorer | Combines signal scores, calculates confidence, and keeps uncertain cases uncertain. |
 | Label selector | Maps scores to exact reader-facing label text. |
-| SQLite audit store | Persists submissions, appeals, and structured audit-log events. |
+| Certificate workflow | Stores verified-human credentials earned through additional creator evidence and exposes the display label on content records. |
+| Analytics dashboard | Summarizes detection patterns, appeal rate, average confidence, and certificate metrics. |
+| SQLite audit store | Persists submissions, appeals, certificates, and structured audit-log events. |
 | `GET /api/log` | Makes grader/reviewer evidence visible in structured JSON. |
 
 ## API Surface
@@ -78,14 +88,19 @@ If a creator disagrees with the decision, they submit an appeal against the `sub
 | --- | --- | --- | --- |
 | `GET /health` | No body | `{ "status": "ok" }` | Quick local/demo health check. |
 | `POST /api/submissions` | `content` string, optional `creator_id` string | Submission id, attribution result, `ai_probability`, `confidence_score`, transparency label text, signal details, status, timestamp | Classify a new text submission. |
+| `POST /api/submissions` | `content_type: image_description` plus `image_description` | Same classification output plus `content_type` and source payload | Classify an image-derived description through the provenance pipeline. |
+| `POST /api/submissions` | `content_type: metadata` plus `metadata` object | Same classification output plus `content_type` and source payload | Classify structured metadata through the provenance pipeline. |
 | `GET /api/submissions/<submission_id>` | Submission id in URL | Stored classification record and current status | Let a reviewer or demo inspect one submission after classification or appeal. |
 | `POST /api/appeals` | `submission_id`, `reason`, optional `creator_id` | Appeal id, original decision summary, updated status, timestamp | Let creators contest a classification. |
+| `POST /api/certificates` | `submission_id`, `creator_id`, `verification_method`, `evidence_summary` | Verified-human certificate and display label | Let creators earn a provenance certificate through an additional verification step. |
+| `GET /api/analytics` | No body | Detection patterns, appeal rate, average confidence, certificate metrics | Provide dashboard data for reviewers and demos. |
+| `GET /dashboard` | No body | Simple HTML analytics dashboard | Show detection patterns, appeal rate, and one additional metric visually. |
 | `GET /api/log?limit=10` | Optional `limit` query parameter | Structured audit-log entries | Show classification and appeal evidence for grading/review. |
 
 ## Submission Flow
 
-1. A creator sends text and an optional `creator_id` to `POST /api/submissions`.
-2. Flask validates that the content is long enough to score and Flask-Limiter checks the per-IP limit.
+1. A creator sends text, an image description, or structured metadata plus an optional `creator_id` to `POST /api/submissions`.
+2. Flask normalizes the content into analysis text, validates that it is long enough to score, and Flask-Limiter checks the per-IP limit.
 3. The detection pipeline runs three signals:
    - Groq LLM classification for semantic judgment.
    - Stylometric heuristics for measurable writing structure.
@@ -317,3 +332,39 @@ Data returned and stored: each submission response and `classification_decision`
 README documentation: the ensemble is documented in `## Detection Signals`, `## Confidence and Uncertainty`, and the Milestone 4 through Milestone 6 evidence sections. The README explains why the third signal is distinct, how it is weighted, and what it can misclassify.
 
 Verification: `python scripts/milestone4_eval.py` shows the third signal's score beside the other signals, `python scripts/milestone5_demo.py` proves the production flow still returns all label variants, and `python -m unittest discover -s tests` verifies the API and audit log include per-signal evidence.
+
+## Stretch Feature: Provenance Certificate
+
+Stretch feature attempted: provenance certificate. A creator can earn a `verified_human` credential for a specific submission by completing an additional verification step with a method such as draft-history review, platform identity review, or manual review.
+
+Architecture impact: the certificate flow starts after a submission exists. A creator sends `submission_id` or `content_id`, `creator_id`, `verification_method`, and `evidence_summary` to a certificate endpoint. The app stores the certificate, updates the content status to `verified_human`, and writes a `certificate_issued` audit event beside the original classification.
+
+Data returned and stored: the certificate stores a certificate id, content id, creator id, method, evidence summary, status, display label, and timestamp. `GET /api/submissions/<id>` returns a `provenance_certificate` object so the verified-human credential can be displayed with the content.
+
+README documentation: the README will document the endpoint, display label, and example response in the stretch features section.
+
+Verification: tests will create a submission, issue a certificate, confirm the submission status becomes `verified_human`, confirm the certificate display label is returned with the content, and confirm the audit log includes `certificate_issued`.
+
+## Stretch Feature: Analytics Dashboard
+
+Stretch feature attempted: analytics dashboard. The app will expose both JSON analytics and a simple HTML dashboard for reviewer/demo use.
+
+Architecture impact: analytics reads from existing SQLite submissions, appeals, and certificates. It does not change classification behavior. `GET /api/analytics` returns structured metrics and `GET /dashboard` renders a small dashboard view.
+
+Data returned and stored: no new dashboard-specific storage is needed. The analytics summary includes detection-pattern counts by attribution result and content type, appeal rate, average confidence score, certificate count, and verified-human rate.
+
+README documentation: the README will document the analytics routes and the metrics shown.
+
+Verification: tests will seed submissions, an appeal, and a certificate, then assert that `/api/analytics` reports detection patterns, appeal rate, and average confidence. A dashboard test will confirm the HTML view displays those metrics.
+
+## Stretch Feature: Multi-Modal Support
+
+Stretch feature attempted: multi-modal support. The app will accept a second content type beyond text by supporting `image_description` submissions and structured `metadata` submissions.
+
+Architecture impact: request normalization happens before the detection pipeline. Text submissions continue unchanged. Image descriptions and structured metadata are converted into an analysis text representation, then pass through the same signal, scoring, labeling, storage, and audit-log flow.
+
+Data returned and stored: submissions include `content_type` and a structured `source_payload` so reviewers can see whether the scored text came from direct writing, an image description, or metadata fields.
+
+README documentation: the README will include example requests for `image_description` and `metadata` submissions and explain that this is content-derived multi-modal support, not binary image analysis.
+
+Verification: tests will submit structured metadata through `/submit`, confirm a normal classification response, confirm `content_type: metadata`, and confirm the audit log records the source content type.

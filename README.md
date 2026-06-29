@@ -41,6 +41,12 @@ Run the Milestone 5 production-layer evidence script:
 python scripts/milestone5_demo.py
 ```
 
+Run the stretch-feature evidence script:
+
+```bash
+python scripts/stretch_demo.py
+```
+
 Prepare the portfolio walkthrough:
 
 ```bash
@@ -121,9 +127,26 @@ The production default submission limit is `12 per minute; 100 per day`. The low
 
 Milestone 6 is the final documentation and walkthrough pass. This README is the canonical project record: it explains the architecture, why each detection signal exists, how confidence scoring communicates uncertainty, exact transparency label text, rate-limit choices, audit-log evidence, limitations, spec reflection, and AI usage. The short recording outline for the separate Course Portal video is in `docs/walkthrough_script.md`.
 
+## Stretch Features Evidence
+
+This repo implements all four Project 4 stretch features.
+
+Verification command:
+
+```bash
+python scripts/stretch_demo.py
+```
+
+| Stretch feature | Evidence |
+| --- | --- |
+| Ensemble detection | The pipeline uses three signals: `groq_llm_classification`, `stylometric_heuristics`, and `formulaic_pattern_scan`, with documented weights of `55%`, `30%`, and `15%` when Groq is available. |
+| Provenance certificate | `POST /certificate` or `POST /api/certificates` creates a `verified_human` credential after an additional verification step and returns a display label for the content. |
+| Analytics dashboard | `GET /api/analytics` returns structured metrics and `GET /dashboard` renders a simple dashboard showing detection patterns, appeal rate, average confidence, and verified-human rate. |
+| Multi-modal support | `POST /submit` accepts `content_type: image_description` and `content_type: metadata`; those inputs are normalized into analysis text and pass through the same scoring, label, storage, and audit-log flow. |
+
 ## Architecture Overview
 
-A submitted text enters through `POST /api/submissions` or the course-compatible `POST /submit` alias. Flask validates that the body is long enough to analyze, then Flask-Limiter checks the per-client submission limit before any scoring work happens. The detection pipeline runs independent signals over the same text: a Groq LLM review when an API key is present, local stylometric heuristics, and a local formulaic-pattern scan.
+A submitted item enters through `POST /api/submissions` or the course-compatible `POST /submit` alias. Flask accepts direct writing, an image description, or structured metadata, then normalizes it into analysis text. After validation, Flask-Limiter checks the per-client submission limit before any scoring work happens. The detection pipeline runs independent signals over the normalized text: a Groq LLM review when an API key is present, local stylometric heuristics, and a local formulaic-pattern scan.
 
 Each signal returns the same normalized shape: an AI probability, confidence, availability flag, rationale, and signal-specific details. The ensemble scorer weights the available signals into one `ai_probability`, then calculates `confidence_score` from distance away from the uncertain middle plus signal agreement. The label selector maps that result to one of three reader-facing transparency labels. SQLite stores the submission, content hash, scores, signal details, label text, status, and timestamps, then writes the same decision to the structured `audit_log`.
 
@@ -135,12 +158,34 @@ If the creator disagrees, they send `POST /api/appeals` or `POST /appeal` with t
 
 `POST /api/submissions`
 
-Milestone 3 compatibility alias: `POST /submit` accepts the same JSON body. It also accepts `text` as an alias for `content`, but `content` is the canonical field used in the rest of the API.
+Milestone 3 compatibility alias: `POST /submit` accepts the same JSON body. It also accepts `text` as an alias for `content`, but `content` is the canonical field for text submissions.
 
 ```json
 {
   "creator_id": "creator-demo",
   "content": "A poem, short story excerpt, blog post, or other text-based creative work..."
+}
+```
+
+Stretch multi-modal aliases:
+
+```json
+{
+  "creator_id": "creator-image-demo",
+  "content_type": "image_description",
+  "image_description": "A hand-painted poster hangs beside a studio window after a rainy afternoon..."
+}
+```
+
+```json
+{
+  "creator_id": "creator-metadata-demo",
+  "content_type": "metadata",
+  "metadata": {
+    "title": "Gallery Wall Notes",
+    "caption": "Installation notes for a handmade gallery wall with uneven frames.",
+    "materials": ["paper", "ink", "wood"]
+  }
 }
 ```
 
@@ -150,6 +195,7 @@ The response includes a structured attribution result, confidence score, transpa
 {
   "submission_id": "uuid",
   "content_id": "uuid",
+  "content_type": "text",
   "status": "classified",
   "attribution_result": "uncertain",
   "attribution": "uncertain",
@@ -159,6 +205,7 @@ The response includes a structured attribution result, confidence score, transpa
   "transparency_label": "Provenance Guard: We cannot confidently determine how this piece was created. Readers should treat the attribution as uncertain, and the creator can provide more context.",
   "label": "Provenance Guard: We cannot confidently determine how this piece was created. Readers should treat the attribution as uncertain, and the creator can provide more context.",
   "appeal_filed": false,
+  "provenance_certificate": null,
   "signals": [
     {
       "name": "groq_llm_classification",
@@ -200,6 +247,36 @@ Milestone 5 compatibility alias: `POST /appeal` accepts `content_id` as an alias
 
 The appeal endpoint stores the creator's reasoning, logs the appeal beside the original decision, and updates the content status to `under_review`.
 
+### Issue a provenance certificate
+
+`POST /api/certificates`
+
+Stretch compatibility alias: `POST /certificate`.
+
+```json
+{
+  "content_id": "uuid-from-submit-response",
+  "creator_id": "creator-demo",
+  "verification_method": "draft_history",
+  "evidence_summary": "Creator provided timestamped draft notes and revision history that match the submitted piece."
+}
+```
+
+Allowed verification methods are `draft_history`, `platform_identity`, and `manual_review`. A successful response returns a `verified_human` credential:
+
+```json
+{
+  "certificate_id": "uuid",
+  "content_id": "uuid-from-submit-response",
+  "creator_id": "creator-demo",
+  "verification_method": "draft_history",
+  "status": "verified_human",
+  "display_label": "Verified human creator: additional provenance evidence was reviewed for this content."
+}
+```
+
+After certification, `GET /api/submissions/<content_id>` includes the same object as `provenance_certificate`, so a platform can display the verified-human label with the content.
+
 ### View the audit log
 
 `GET /api/log?limit=10`
@@ -207,6 +284,16 @@ The appeal endpoint stores the creator's reasoning, logs the appeal beside the o
 Milestone compatibility alias: `GET /log?limit=10`.
 
 Returns structured JSON entries ordered newest-first.
+
+### View analytics
+
+`GET /api/analytics`
+
+Returns detection-pattern counts, content-type counts, appeal rate, certificate count, verified-human rate, and average confidence score.
+
+`GET /dashboard`
+
+Renders the same analytics as a simple HTML dashboard for demos. It includes detection patterns, appeal rate, average confidence, and verified-human rate.
 
 ## Detection Signals
 
@@ -264,7 +351,7 @@ Reasoning: a real writing platform might see a creator checking several drafts i
 
 ## Audit Log
 
-The audit log is stored in SQLite at `data/provenance_guard.sqlite3` by default. Each classification entry includes timestamp, content ID, attribution result, confidence score, content hash, label text, individual signal scores, and `appeal_filed: false`. Each appeal entry includes the content ID, creator reasoning, `status: under_review`, `appeal_filed: true`, and the original decision.
+The audit log is stored in SQLite at `data/provenance_guard.sqlite3` by default. Each classification entry includes timestamp, content ID, content type, attribution result, confidence score, content hash, label text, individual signal scores, and `appeal_filed: false`. Each appeal entry includes the content ID, creator reasoning, `status: under_review`, `appeal_filed: true`, and the original decision. Each certificate entry includes the verified-human status, verification method, display label, and original decision summary.
 
 Example visible entries from `GET /api/log?limit=3` after running `python scripts/seed_demo.py`:
 
@@ -349,3 +436,7 @@ The video should show the README architecture section, run the milestone demo, p
 - `GET /api/log` returns structured audit entries with classifications and appeals.
 - `planning.md` includes an `## Architecture` section with a diagram and design narrative.
 - `docs/walkthrough_script.md` prepares the short portfolio walkthrough video.
+- Stretch: three-signal ensemble detection is implemented and documented.
+- Stretch: provenance certificates can mark content as `verified_human` and return a display label.
+- Stretch: `/api/analytics` and `/dashboard` show detection patterns, appeal rate, and average confidence.
+- Stretch: `image_description` and `metadata` submissions are supported in addition to text.
