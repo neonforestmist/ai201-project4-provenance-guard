@@ -11,6 +11,17 @@
 - Architecture diagram included under `## Architecture`.
 - AI Tool Plan included with the specific implementation work delegated to AI assistance and how it will be checked.
 
+## Milestone 2 Checklist
+
+- `planning.md` exists in the repo root and is the primary implementation spec.
+- Detection signals are defined with what each measures, the output shape, blind spots, and combination strategy.
+- Uncertainty representation defines what middle scores mean and the thresholds for likely AI, uncertain, and likely human labels.
+- Transparency label design includes the exact text for all three required variants.
+- Appeals workflow defines who can appeal, what information they provide, what status changes, what gets logged, and what a reviewer sees.
+- Anticipated edge cases name specific content types and failure modes.
+- `## Architecture` includes the diagram and narrative for submission and appeal flows.
+- `## AI Tool Plan` specifies M3, M4, and M5 inputs, generation requests, and verification checks.
+
 ## Problem Summary
 
 Creative sharing platforms need a way to give readers context about whether a post appears human-written, AI-generated, or uncertain without turning an imperfect detector into a final judgment. Provenance Guard accepts submitted writing, runs multiple independent review signals, combines those signals into a confidence-aware result, returns a plain-language transparency label, and gives creators a path to appeal.
@@ -61,6 +72,16 @@ If a creator disagrees with the decision, they submit an appeal against the `sub
 | SQLite audit store | Persists submissions, appeals, and structured audit-log events. |
 | `GET /api/log` | Makes grader/reviewer evidence visible in structured JSON. |
 
+## API Surface
+
+| Endpoint | Input | Output | Purpose |
+| --- | --- | --- | --- |
+| `GET /health` | No body | `{ "status": "ok" }` | Quick local/demo health check. |
+| `POST /api/submissions` | `content` string, optional `creator_id` string | Submission id, attribution result, `ai_probability`, `confidence_score`, transparency label text, signal details, status, timestamp | Classify a new text submission. |
+| `GET /api/submissions/<submission_id>` | Submission id in URL | Stored classification record and current status | Let a reviewer or demo inspect one submission after classification or appeal. |
+| `POST /api/appeals` | `submission_id`, `reason`, optional `creator_id` | Appeal id, original decision summary, updated status, timestamp | Let creators contest a classification. |
+| `GET /api/log?limit=10` | Optional `limit` query parameter | Structured audit-log entries | Show classification and appeal evidence for grading/review. |
+
 ## Submission Flow
 
 1. A creator sends text and an optional `creator_id` to `POST /api/submissions`.
@@ -82,14 +103,15 @@ If a creator disagrees with the decision, they submit an appeal against the `sub
 3. The appeal is stored with the creator's reasoning.
 4. The submission status changes from `classified` to `under_review`.
 5. A structured `appeal_submitted` audit entry records the appeal and original decision.
+6. A human reviewer can inspect the appeal through `GET /api/log` or `GET /api/submissions/<submission_id>` and see the original result, confidence score, label text, signal evidence, and creator reasoning.
 
 ## Detection Signals
 
-| Signal | Property measured | Why it helps | Limitation |
-| --- | --- | --- | --- |
-| Groq LLM classification | Semantic and stylistic plausibility judged by `llama-3.3-70b-versatile`. | It can detect holistic patterns that simple statistics miss. | It can be overconfident and depends on API availability. |
-| Stylometric heuristics | Sentence-length variance, vocabulary diversity, average sentence length, punctuation density. | AI-generated prose often has smoother structure and less irregularity than human drafts. | Genre and author style can produce similar statistics. |
-| Formulaic pattern scan | Template phrases, repeated bigrams, repeated sentence openings. | Generated text can lean on repeated transitions or generic framing. | Formal human essays can trigger the same markers. |
+| Signal | Property measured | Output shape | Why it helps | Limitation |
+| --- | --- | --- | --- | --- |
+| Groq LLM classification | Semantic and stylistic plausibility judged by `llama-3.3-70b-versatile`. | JSON-like signal object with `ai_probability` from `0.0` to `1.0`, `confidence` from `0.0` to `1.0`, availability flag, and a short rationale. | It can detect holistic patterns that simple statistics miss. | It can be overconfident, can inherit model bias, and depends on API availability. |
+| Stylometric heuristics | Sentence-length variance, vocabulary diversity, average sentence length, punctuation density. | Signal object with `ai_probability`, `confidence`, and details such as type-token ratio, sentence count, average sentence length, and punctuation density. | AI-generated prose often has smoother structure and less irregularity than human drafts. | Genre and author style can produce similar statistics. It cannot understand meaning or drafting history. |
+| Formulaic pattern scan | Template phrases, repeated bigrams, repeated sentence openings. | Signal object with `ai_probability`, `confidence`, and details such as formulaic marker hits, repeated bigram ratio, and repeated sentence openers. | Generated text can lean on repeated transitions or generic framing. | Formal human essays can trigger the same markers, and subtle AI text may avoid obvious repeated phrases. |
 
 ### Why These Signals Are Distinct
 
@@ -97,7 +119,30 @@ The Groq signal is semantic: it asks a model to judge the whole text as writing.
 
 The minimum required pair is Groq plus stylometry. I added the formulaic scan as a third small signal because repeated template phrasing is not the same as general sentence-length variance or vocabulary diversity. It also gives local development a useful extra signal if Groq is unavailable.
 
-## Scoring and Thresholds
+### Combined Decision Output
+
+Every signal is normalized to the same interface:
+
+```json
+{
+  "name": "stylometric_heuristics",
+  "ai_probability": 0.64,
+  "confidence": 0.72,
+  "available": true,
+  "rationale": "Measures structural regularity.",
+  "details": {}
+}
+```
+
+The final API response combines those signals into:
+
+- `attribution_result`: `ai_generated`, `human_written`, or `uncertain`.
+- `ai_probability`: weighted probability-like score from `0.0` to `1.0`.
+- `confidence_score`: strength of evidence for showing a clear label.
+- `transparency_label`: exact reader-facing label text.
+- `signals`: list of individual signal outputs so the result is auditable.
+
+## Uncertainty Representation
 
 When Groq is available, weights are:
 
@@ -115,15 +160,22 @@ Thresholds:
 | `ai_probability <= 0.28` and `confidence_score >= 0.70` | High-confidence human |
 | Everything else | Uncertain |
 
-`0.50` means the system does not have a strong direction. Scores near `0.51` should produce the uncertain label because the evidence is too weak to be useful to readers. Scores near `0.95` should produce a high-confidence label only when signals strongly agree.
+`0.50` means the system does not have a strong direction. A confidence score around `0.60` means the system has a mild lean but not enough evidence to show a strong claim to readers, so the label should usually be uncertain unless the probability is far from the middle and signals agree. Scores near `0.51` should produce the uncertain label because the evidence is too weak to be useful to readers. Scores near `0.95` should produce a high-confidence label only when signals strongly agree.
 
-### Uncertainty Policy
+### Score Calibration Plan
 
 Uncertainty is a first-class result, not an error state. If the system lands near the middle or the signals disagree, the reader should see the uncertain label instead of a forced AI/human verdict. This is especially important because creative writing can be intentionally polished, repetitive, minimal, or experimental.
 
 The confidence score should communicate strength of evidence, not moral certainty. A high confidence score means the available signals agree strongly enough to show a clearer label. A low or medium confidence score means the system should avoid overclaiming and invite more context through the appeal process.
 
-## Transparency Labels
+Raw signal outputs map to the final score in two steps:
+
+1. Compute a weighted `ai_probability` from the available normalized signal outputs.
+2. Compute confidence from distance away from `0.50`, then adjust slightly upward when signals agree and keep it lower when signals conflict.
+
+This means a text can have an `ai_probability` above `0.50` and still receive the uncertain label if the evidence is weak or mixed. That is intentional.
+
+## Transparency Label Design
 
 | Variant | Exact text |
 | --- | --- |
@@ -134,6 +186,43 @@ The confidence score should communicate strength of evidence, not moral certaint
 ### Label Design Notes
 
 The labels avoid technical terms like classifier, logits, ensemble, or probability. They say what the reader needs to know, include appropriate caution, and make the appeal path visible when the result could harm the creator. The high-confidence human label still avoids saying "verified human" because this system does not prove authorship; it only reports limited AI-generation signals.
+
+Before implementation, I reviewed the variants for three qualities:
+
+- The likely AI label does not say "caught" or "proven" because that overstates the detector.
+- The uncertain label tells readers how to interpret the result rather than treating uncertainty as a broken state.
+- The likely human label avoids creating a fake certificate; verified-human status would need a separate stretch feature.
+
+## Appeals Workflow
+
+Any creator with a `submission_id` can appeal a classification. The appeal input is:
+
+```json
+{
+  "submission_id": "uuid",
+  "creator_id": "creator-optional",
+  "reason": "This was drafted from my own outline and I can provide earlier versions."
+}
+```
+
+When an appeal is received, the system:
+
+1. Verifies the submission exists.
+2. Requires a meaningful reason instead of an empty or one-word appeal.
+3. Stores the appeal reason in the `appeals` table.
+4. Updates the submission status to `under_review`.
+5. Writes an `appeal_submitted` event to the audit log.
+6. Returns a JSON response containing the appeal id, updated status, original decision summary, and timestamp.
+
+A human reviewer opening the appeal queue should see:
+
+- submission id and content preview
+- original attribution result
+- original confidence score and AI probability
+- transparency label originally shown to readers
+- per-signal scores and rationales
+- creator appeal reason
+- current status: `under_review`
 
 ## Rate Limit Plan
 
@@ -192,14 +281,27 @@ The expected behavior is not perfect detection. The expected behavior is separat
 | Creator appeals with vague reasoning | Return a validation error and ask for a more specific explanation. |
 | Same content submitted repeatedly | Store each decision separately with a content hash so reviewers can compare repeated decisions. |
 | Signals strongly disagree | Route to the uncertain label because disagreement means the system should not overclaim. |
+| Very polished non-native English writing | Might look formulaic because of repeated transition phrases; keep thresholds conservative and show appeal path. |
+| AI text intentionally edited by a human | May produce mixed signals; return uncertain when signal disagreement is high. |
 
 ## AI Tool Plan
 
-I plan to use AI tools during implementation for these specific tasks:
+The AI tool plan is milestone-specific so each implementation prompt can be grounded in the spec instead of a vague feature request.
 
-1. Generate the Flask route and storage scaffolding from the required feature list, the architecture diagram, and the submission/appeal flows above.
-2. Draft detector helper functions from the Detection Signals section, while I review whether each signal really measures a different property of the text.
-3. Draft tests that map directly to the grading rubric: structured submission response, per-signal scores, appeal status update, and audit-log visibility.
-4. Draft README evidence from the Transparency Labels, Rate Limit Plan, Audit Log Plan, and Validation Plan sections.
+| Implementation milestone | Spec sections to provide | What I will ask AI to generate | Verification before accepting |
+| --- | --- | --- | --- |
+| M3: submission endpoint + first signal | `## Architecture`, `## API Surface`, `## Submission Flow`, Groq row from `## Detection Signals`, and `## Combined Decision Output` | Flask app skeleton, `POST /api/submissions` route, Groq signal function, JSON response shape, and a small health route | Run direct function checks with a few inputs, verify the route returns structured JSON, confirm missing/short content gives useful errors, and make sure the Groq result is visible as a signal object. |
+| M4: second signal + confidence scoring | `## Detection Signals`, `## Uncertainty Representation`, `## Validation Plan`, and the architecture diagram | Stylometric signal function, formulaic pattern signal if time allows, ensemble scoring logic, threshold mapping, and tests for high-confidence/lower-confidence spread | Compare clearly formulaic, sensory human-like, and ambiguous samples; confirm scores vary meaningfully; confirm borderline cases stay uncertain; run unit tests. |
+| M5: production layer | `## Transparency Label Design`, `## Appeals Workflow`, `## Rate Limit Plan`, `## Audit Log Plan`, and the architecture diagram | Label selector, `/api/appeals`, `/api/log`, SQLite persistence, rate limiting, and README evidence sections | Test all three label variants are reachable, submit an appeal and confirm status becomes `under_review`, confirm `GET /api/log` shows at least three structured entries including an appeal, and verify rate limiting returns HTTP `429`. |
 
 I will verify generated code by running the unit tests, running the demo seed script, checking real API responses, and confirming that README evidence covers the rubric items. I will also manually review the labels to make sure they sound fair to a non-technical reader and do not imply certainty the system does not have.
+
+## Stretch Feature Gate
+
+Before starting any stretch feature, I will update this planning document with:
+
+- which stretch feature is being attempted
+- how it changes the architecture diagram
+- what new data is stored or returned
+- how it will be documented in the README
+- how it will be verified in a demo or test
