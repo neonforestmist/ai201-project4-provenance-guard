@@ -55,6 +55,34 @@ curl -s -X POST http://127.0.0.1:5000/submit \
 
 A successful response includes `submission_id`, `attribution_result`, `confidence_score`, `transparency_label`, and a `signals` array containing `groq_llm_classification`.
 
+## Milestone 4 Evidence
+
+Milestone 4 adds the second detection signal and real confidence scoring. The second signal is `stylometric_heuristics`, a standalone function that measures sentence-length variance, vocabulary diversity, average sentence length, and punctuation density. The app combines that score with `groq_llm_classification` and the optional `formulaic_pattern_scan` ensemble signal to produce `ai_probability`, `confidence_score`, and one of three label categories.
+
+Run the four-input scoring check:
+
+```bash
+python scripts/milestone4_eval.py
+```
+
+This script uses deterministic local scoring and skips live Groq calls so the comparison remains stable. The Flask app still uses Groq automatically when `GROQ_API_KEY` is configured.
+
+Expected local output pattern:
+
+| Sample | Expected pattern |
+| --- | --- |
+| `template_ai` | Highest AI probability; should map to `ai_generated`. |
+| `casual_human` | Lowest AI probability; should map to `human_written`. |
+| `borderline_formulaic` | Middle score; should stay `uncertain`. |
+| `borderline_mixed_human` | Middle score; should stay `uncertain`. |
+
+The audit log records individual signal scores and the combined result. Use either endpoint:
+
+```bash
+curl -s http://127.0.0.1:5000/api/log?limit=3
+curl -s http://127.0.0.1:5000/log?limit=3
+```
+
 ## API
 
 ### Submit content
@@ -120,6 +148,8 @@ The appeal endpoint stores the creator's reasoning, logs the appeal beside the o
 ### View the audit log
 
 `GET /api/log?limit=10`
+
+Milestone compatibility alias: `GET /log?limit=10`.
 
 Returns structured JSON entries ordered newest-first.
 

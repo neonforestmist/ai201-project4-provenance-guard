@@ -125,8 +125,7 @@ def create_app(test_config: Optional[dict] = None) -> Flask:
             return jsonify({"error": "submission_not_found"}), 404
         return jsonify(appeal), 201
 
-    @app.get("/api/log")
-    def audit_log():
+    def audit_log_response():
         raw_limit = request.args.get("limit", "50")
         try:
             limit = max(1, min(int(raw_limit), 100))
@@ -134,5 +133,13 @@ def create_app(test_config: Optional[dict] = None) -> Flask:
             limit = 50
         entries = current_app.extensions["audit_store"].list_audit_log(limit=limit)
         return jsonify({"entries": entries, "count": len(entries)})
+
+    @app.get("/api/log")
+    def audit_log():
+        return audit_log_response()
+
+    @app.get("/log")
+    def audit_log_alias():
+        return audit_log_response()
 
     return app
