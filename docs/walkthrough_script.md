@@ -1,64 +1,112 @@
-# Portfolio Walkthrough Script
+# Portfolio Walkthrough Video Script
 
-Use this as a short recording guide for the Course Portal video. Aim for 2 to 3 minutes.
+Target length: 2 to 3 minutes.
 
-## Before Recording
+## Setup
 
-Open the repo and activate the virtual environment:
+Open the repo in your terminal and run:
 
 ```bash
 source .venv/bin/activate
-```
-
-Optional sanity check:
-
-```bash
 python -m unittest discover -s tests
-python scripts/stretch_demo.py
 ```
 
-## Recording Flow
+Keep these files ready to show:
 
-1. Start on the README.
+- `README.md`
+- `planning.md`
+- `scripts/milestone5_demo.py`
+- `scripts/stretch_demo.py`
 
-Say: "This is Provenance Guard, a Flask backend for creative platforms that need to label whether submitted writing appears AI-generated, human-written, or uncertain without pretending the detector is perfect."
+## 0:00-0:20 - Intro
 
-2. Show the architecture overview.
+Screen: Show the top of `README.md`.
 
-Say: "A submission enters through `/submit`, passes validation and rate limiting, then runs through independent signals: Groq when configured, stylometric heuristics, and a formulaic pattern scan. The scorer combines those into an AI probability and confidence score, selects a transparency label, stores the result in SQLite, and writes an audit-log entry."
+Say:
 
-3. Run the production-layer demo.
+"Hi, this is Provenance Guard, my Project 4 backend for CodePath AI201. The goal is to help a creative sharing platform give readers fair context about whether a piece of submitted content appears AI-generated, human-written, or uncertain. The system is intentionally cautious because a false AI accusation against a human creator can be harmful."
+
+## 0:20-0:50 - Architecture
+
+Screen: Show the architecture overview in `README.md` or the Mermaid diagram in `planning.md`.
+
+Say:
+
+"A submission comes into the Flask API through `/submit` or `/api/submissions`. The app accepts normal text, an image description, or structured metadata, then normalizes that into analysis text. It checks validation and rate limits, runs the detection signals, combines the signal scores into an AI probability and confidence score, selects a reader-facing transparency label, stores the result in SQLite, and writes a structured audit-log entry."
+
+## 0:50-1:25 - Detection and Labels
+
+Screen: Run:
 
 ```bash
 python scripts/milestone5_demo.py
 ```
 
+Say:
+
+"Here I’m running the production-layer demo. The system returns three different transparency label variants. A high-confidence AI-like sample gets the likely AI label, a casual human-like sample gets the likely human label, and a mixed formulaic sample stays uncertain. That uncertain case is important: if the signals disagree or the confidence is low, the system avoids overclaiming."
+
+Point out in the output:
+
+- `likely_ai`
+- `likely_human`
+- `uncertain`
+- confidence scores
+
+## 1:25-1:55 - Appeals and Audit Log
+
+Screen: Stay on the `milestone5_demo.py` output.
+
+Say:
+
+"The same demo also shows the appeals workflow. A creator can submit an appeal with their reasoning, and the content status changes to `under_review`. The appeal is written into the same audit log as the original classification, so reviewers can see both the original decision and the creator’s context. The audit log is structured JSON, not loose console output."
+
 Point out:
 
-- The three transparency labels all appear.
-- The high-confidence AI and high-confidence human cases get clear labels.
-- The borderline case stays `uncertain`.
+- `status: under_review`
+- `appeal_reasoning`
+- `classification_decision`
+- `appeal_submitted`
 
-4. Show the appeal workflow in the demo output.
+## 1:55-2:30 - Stretch Features
 
-Say: "The creator can appeal with reasoning. The appeal updates the content status to `under_review` and records `appeal_reasoning` in the audit log beside the original classification."
+Screen: Run:
 
-5. Show the audit log and rate-limit proof.
+```bash
+python scripts/stretch_demo.py
+```
 
-Say: "The audit log is structured JSON with content IDs, statuses, confidence, signal evidence, and appeal fields. The demo also lowers the limit to `2 per minute` so it can show `[201, 201, 429]` quickly. The production default is `12 per minute; 100 per day`."
+Say:
 
-6. Mention design decisions.
+"I also implemented all four stretch features. First, the detector is an ensemble with three signals: Groq classification when configured, stylometric heuristics, and a formulaic pattern scan. Second, the provenance certificate endpoint can mark a piece as `verified_human` after extra evidence like draft history or manual review. Third, `/api/analytics` and `/dashboard` show detection patterns, appeal rate, average confidence, and verified-human rate. Fourth, the system supports image descriptions and structured metadata in addition to direct text."
 
-Say: "The most important design choice was to make uncertainty a real outcome. If signals disagree, the system avoids a strong accusation and shows the uncertain label. That matters because false positives can hurt human creators."
+Point out:
 
-7. Mention limitations.
+- `content_type: text`
+- `content_type: image_description`
+- `content_type: metadata`
+- `Verified human creator`
+- `appeal_rate`
+- `average_confidence_score`
 
-Say: "This system can still get polished essays, short poems, non-native English writing, or intentionally repetitive experimental writing wrong because those styles can look uniform or formulaic to the local signals. That is why the appeal path and audit log are part of the core design."
+## 2:30-2:55 - Design Decisions and Limitations
 
-8. Mention stretch features.
+Screen: Show README sections `Confidence and Uncertainty` and `Known Limitations`.
 
-Say: "The stretch features are also covered: the ensemble uses three signals, the certificate endpoint issues a verified-human display label after extra evidence, the dashboard shows detection patterns and appeal rate, and the submit endpoint handles image descriptions and structured metadata in addition to text."
+Say:
 
-## Closing Line
+"The biggest design decision was making uncertainty a real product state instead of forcing a binary answer. The confidence score is based on distance from the uncertain middle and signal agreement. The main limitation is that polished essays, short poems, non-native English writing, or intentionally repetitive experimental writing can look formulaic to local signals. That is why the audit log, appeal workflow, and verified-human certificate are part of the design."
 
-Say: "The detailed evidence is in the README and source code. The walkthrough just shows the end-to-end flow: submit, score, label, appeal, audit, and rate-limit."
+## Closing
+
+Screen: Show the submission checklist in `README.md`.
+
+Say:
+
+"That’s the walkthrough: submit content, run multi-signal scoring, return a transparency label, support appeals, log the decision, rate-limit submissions, and provide the stretch features for certificates, analytics, and multi-modal input. The detailed evidence is in the README, tests, and demo scripts."
+
+## Quick Backup Version
+
+If you need a shorter version, say this:
+
+"Provenance Guard is a Flask backend for labeling creative submissions as likely AI-generated, likely human-written, or uncertain. Submissions go through validation, rate limiting, three detection signals, weighted confidence scoring, transparency label selection, SQLite storage, and structured audit logging. The system is cautious because false positives can hurt creators, so uncertain is a real outcome. Creators can appeal, which updates the status to `under_review` and records their reasoning beside the original decision. For stretch, I added a three-signal ensemble, verified-human provenance certificates, an analytics dashboard, and support for image descriptions and structured metadata. The README documents the architecture, confidence examples, label text, rate limits, limitations, AI usage, and demo evidence."
