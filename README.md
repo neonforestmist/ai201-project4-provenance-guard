@@ -47,12 +47,6 @@ Run the stretch-feature evidence script:
 python scripts/stretch_demo.py
 ```
 
-Prepare the portfolio walkthrough:
-
-```bash
-cat docs/walkthrough_script.md
-```
-
 ## Milestone 3 Evidence
 
 Milestone 3 asks for the Flask submission endpoint and first detection signal to work end to end. This repo now supports both the canonical `POST /api/submissions` route and a course-wording-compatible `POST /submit` alias. The first signal is `groq_llm_classification`, which calls Groq `llama-3.3-70b-versatile` when `GROQ_API_KEY` is configured and returns an auditable signal object with `ai_probability`, `confidence`, `available`, `rationale`, and model details.
@@ -125,7 +119,7 @@ The production default submission limit is `12 per minute; 100 per day`. The low
 
 ## Milestone 6 Evidence
 
-Milestone 6 is the final documentation and walkthrough pass. This README is the canonical project record: it explains the architecture, why each detection signal exists, how confidence scoring communicates uncertainty, exact transparency label text, rate-limit choices, audit-log evidence, limitations, spec reflection, and AI usage. The short recording outline for the separate Course Portal video is in `docs/walkthrough_script.md`.
+Milestone 6 is the final documentation and walkthrough pass. This README is the canonical project record: it explains the architecture, why each detection signal exists, how confidence scoring communicates uncertainty, exact transparency label text, rate-limit choices, audit-log evidence, limitations, spec reflection, and AI usage. The required walkthrough video is submitted separately through the Course Portal.
 
 ## Stretch Features Evidence
 
@@ -414,7 +408,7 @@ I used Codex in several specific places, but I treated the output as a draft to 
 
 ## Portfolio Walkthrough
 
-The required walkthrough video is submitted separately through the Course Portal. The repo includes a short script at `docs/walkthrough_script.md` that walks through the architecture, runs the demo evidence, and gives a few design decisions to narrate. The fastest recording path is:
+The required walkthrough video is submitted separately through the Course Portal. The fastest recording path is:
 
 ```bash
 source .venv/bin/activate
@@ -435,7 +429,6 @@ The video should show the README architecture section, run the milestone demo, p
 - `POST /api/submissions` is rate-limited and documents the chosen limits.
 - `GET /api/log` returns structured audit entries with classifications and appeals.
 - `planning.md` includes an `## Architecture` section with a diagram and design narrative.
-- `docs/walkthrough_script.md` prepares the short portfolio walkthrough video.
 - Stretch: three-signal ensemble detection is implemented and documented.
 - Stretch: provenance certificates can mark content as `verified_human` and return a display label.
 - Stretch: `/api/analytics` and `/dashboard` show detection patterns, appeal rate, and average confidence.
